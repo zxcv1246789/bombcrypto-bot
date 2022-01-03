@@ -11,6 +11,16 @@ import time
 import sys
 import yaml
 
+import win32api
+import win32gui
+import win32con
+import win32ui
+from PIL import Image
+#이미지저장을 위한 라이브러리
+#pip install pillow
+from ctypes import windll
+#윈도우 dll사용을 위한 라이브러리
+
 # Load config file.
 stream = open("config.yaml", 'r')
 c = yaml.safe_load(stream)
@@ -36,8 +46,8 @@ cat = """
                                                .*' /  .*' ; .*`- +'  `*'
                                                `*-*   `*-*  `*-*'
 =========================================================================
-========== 💰 Have I helped you in any way? All I ask is a tip! 🧾 ======
-========== ✨ Faça sua boa ação de hoje, manda aquela gorjeta! 😊 =======
+========== 💰 Have I helped you in any way? All I ask is a tip! 🧾 =====
+========== ✨ Faça sua boa ação de hoje, manda aquela gorjeta! 😊 ======
 =========================================================================
 ======================== vvv BCOIN BUSD BNB vvv =========================
 ============== 0xbd06182D8360FB7AC1B05e871e56c76372510dDf ===============
@@ -103,6 +113,7 @@ def load_images(dir_path='./targets/'):
         path = 'targets/' + file
         targets[remove_suffix(file, '.png')] = cv2.imread(path)
 
+    # 결과값: 이미지 객체 행렬
     return targets
 
 
@@ -153,6 +164,92 @@ def clickBtn(img, timeout=3, threshold = ct['default']):
     start = time.time()
     has_timed_out = False
     while(not has_timed_out):
+
+        # 1. 활성 이미지 서치
+        matches = positions(img, threshold=threshold)
+
+        if(len(matches)==0):
+            has_timed_out = time.time()-start > timeout
+            continue
+
+        # 2. 서치된 대상의 좌표 저장 (x,y): 좌측 상단 좌표, (w,h): 서치할 이미지의 가로,세로 사이즈(width, height)
+        # 해당좌표는 Mouse Position Window 기준 좌표임.
+        x,y,w,h = matches[0]
+
+        # 3. 서치할 이미지의 중앙 좌표 추출 - 활성 매크로 좌표 추출
+        pos_click_x = x+w/2
+        pos_click_y = y+h/2
+
+        # 브라우저 상대좌표 기준 이미지 서치된 좌표 추출
+        hwndname ='Bombcrypto - Chrome'
+        hwnd = win32gui.FindWindow(None, hwndname)
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        _left, _top, _right, _bottom = win32gui.GetClientRect(hwnd)
+        print("\nx: ", x, "y: ", y, "w: ", w, "h: ", h)
+        print("\nleft: ", left, "top: ", top, "right: ", right, "bottom: ", bottom)
+        __left, __top = win32gui.ClientToScreen(hwnd, (_left, _top))
+        __right, __bottom = win32gui.ClientToScreen(hwnd, (_right, _bottom))
+        print("\n_left: ", __left, "_top: ", __top, "_right: ", __right, "_bottom: ", __bottom)
+        rel_click_x = (x-left) + w/2
+        rel_click_y = (y-top) + h/2
+        print("rel_click_x: ", rel_click_x, "rel_click_y: ", rel_click_y)
+
+        lParam = win32api.MAKELONG(int(rel_click_x), int(rel_click_y))
+        hWnd1 = win32gui.FindWindowEx(hwnd, None, None, None)
+        win32gui.SendMessage(hWnd1, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
+        win32gui.SendMessage(hWnd1, win32con.WM_LBUTTONUP, None, lParam)
+
+        # 4. 해당 좌표로 커서 이동, 클릭
+        # moveToWithRandomness(pos_click_x,pos_click_y,1)
+        # pyautogui.click()
+
+        return True
+
+    return False
+
+def  find_browser_image():
+    hwndname ='Bombcrypto - Chrome'
+    hwnd = win32gui.FindWindow(None, hwndname)
+    targetimage = Image.open()
+
+    if hwnd >=1:
+
+        # 1. left, top: 해당 hwnd에 대한 우측 상단 절대좌표값
+        left, top, right, bot = win32gui.GetWindowRect(hwnd)
+
+        w = right - left
+        h = bot - top
+
+        hwndDC = win32gui.GetWindowDC(hwnd)
+        mfcDC  = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
+
+        saveBitMap = win32ui.CreateBitmap()
+        saveBitMap.CreateCompatibleBitmap(mfcDC, w, h)
+
+        saveDC.SelectObject(saveBitMap)
+
+        result = windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 0)
+
+        bmpinfo = saveBitMap.GetInfo()
+        bmpstr = saveBitMap.GetBitmapBits(True)
+        im = Image.frombuffer('RGB',(bmpinfo['bmWidth'], bmpinfo['bmHeight']), bmpstr, 'raw', 'BGRX', 0, 1)
+
+        return im
+    return None
+
+def clickBtn_inactive(img, timeout=3, threshold = ct['default']):
+    """INACTIVE ::: Search for img in the scree, if found moves the cursor over it and clicks.
+    Parameters:
+        img: The image that will be used as an template to find where to click.
+        timeout (int): Time in seconds that it will keep looking for the img before returning with fail
+        threshold(float): How confident the bot needs to be to click the buttons (values from 0 to 1)
+    """
+
+    logger(None, progress_indicator=True)
+    start = time.time()
+    has_timed_out = False
+    while(not has_timed_out):
         matches = positions(img, threshold=threshold)
 
         if(len(matches)==0):
@@ -178,10 +275,16 @@ def printSreen():
         # Grab the data
         return sct_img[:,:,:3]
 
+
 def positions(target, threshold=ct['default'],img = None):
+    """
+    target: 찾으려고 하는 이미지
+    """
+
     if img is None:
         img = printSreen()
     result = cv2.matchTemplate(img,target,cv2.TM_CCOEFF_NORMED)
+    # 이미지 사이즈를 말한다. w: 가로 사이즈, h: 세로 사이즈
     w = target.shape[1]
     h = target.shape[0]
 
@@ -485,44 +588,46 @@ def main():
     }
     # =========
 
-    while True:
-        now = time.time()
+    # 테스트용 코드.
+    now = time.time()
+    login()
 
-        if now - last["check_for_captcha"] > addRandomness(t['check_for_captcha'] * 60):
-            last["check_for_captcha"] = now
+    # while True:
+    #     now = time.time()
 
-        if now - last["heroes"] > addRandomness(t['send_heroes_for_work'] * 60):
-            last["heroes"] = now
-            refreshHeroes()
+    #     if now - last["check_for_captcha"] > addRandomness(t['check_for_captcha'] * 60):
+    #         last["check_for_captcha"] = now
 
-        if now - last["login"] > addRandomness(t['check_for_login'] * 60):
-            sys.stdout.flush()
-            last["login"] = now
-            login()
+    #     if now - last["heroes"] > addRandomness(t['send_heroes_for_work'] * 60):
+    #         last["heroes"] = now
+    #         refreshHeroes()
 
-        if now - last["new_map"] > t['check_for_new_map_button']:
-            last["new_map"] = now
+    #     if now - last["login"] > addRandomness(t['check_for_login'] * 60):
+    #         sys.stdout.flush()
+    #         last["login"] = now
+    #         login()
 
-            if clickBtn(images['new-map']):
-                loggerMapClicked()
+    #     if now - last["new_map"] > t['check_for_new_map_button']:
+    #         last["new_map"] = now
+
+    #         if clickBtn(images['new-map']):
+    #             loggerMapClicked()
 
 
-        if now - last["refresh_heroes"] > addRandomness( t['refresh_heroes_positions'] * 60):
-            last["refresh_heroes"] = now
-            refreshHeroesPositions()
+    #     if now - last["refresh_heroes"] > addRandomness( t['refresh_heroes_positions'] * 60):
+    #         last["refresh_heroes"] = now
+    #         refreshHeroesPositions()
 
-        #clickBtn(teasureHunt)
-        logger(None, progress_indicator=True)
+    #     #clickBtn(teasureHunt)
+    #     logger(None, progress_indicator=True)
 
-        sys.stdout.flush()
+    #     sys.stdout.flush()
 
-        time.sleep(1)
+    #     time.sleep(1)
 
 
 
 if __name__ == '__main__':
-
-
 
     main()
 
